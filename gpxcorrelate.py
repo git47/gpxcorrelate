@@ -1,3 +1,8 @@
+#===============================================================================
+# A simple python gpx correlator for photos. gpscorrelate is fine, but since it
+# is possible to track information beyond coordinates, e.g. temperature and heart
+# rate, I decided to write my own correlator. 
+#===============================================================================
 import xml.etree.ElementTree as ET
 import sys
 import glob
