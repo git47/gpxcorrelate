@@ -9,6 +9,7 @@ import glob
 import re
 import subprocess
 import datetime
+from math import degrees
 
 nsp = {
     "gpx": "http://www.topografix.com/GPX/1/1",
@@ -18,14 +19,8 @@ nsp = {
     "gpxtpx": "http://www.garmin.com/xmlschemas/TrackPointExtension/v1",
 }
 
-def hexatupel(gpsstring):
-    htupel = []
-    for val in gpsstring.split(' '):
-        tmp = val.split('/')
-        if len(tmp) == 1: tmp.append('1')
-        htupel.append(tmp)
-    #end for        
-    # htupel = [val.split('/') for val in gpsstring.split(',')]
+def hexatupel_to_gpsrational(ht_string):
+    htupel = [val.split('/') for val in ht_string.split()]
     result = 0.0
     factor = 1.0
     for i in range(len(htupel)):
@@ -35,31 +30,38 @@ def hexatupel(gpsstring):
     return result
 #end def
 
-def get_exif_from_imagemagick(imgfile):
-    exif = {}
+def gpsrational_to_hexatupel(rational):
+    degrees = int(rational)
+    minutes = int(60 * (rational - degrees))
+    seconds = 3600 * (rational - degrees) - 60 * minutes
+    return "{d}/1 {d}/1 {d}/100".format(degrees, minutes, int(100*seconds))
+#end def
+
+def set_exiv_gps(imgfile, lon, lat, alt=None):
+    cmdlat = '-M"set Exif.GPSInfo.GPSLatitude {lat}" -M"set Exif.GPSInfo.GPSLatitudeRef {latref}"'
+    cmdlon = '-M"set Exif.GPSInfo.GPSLatitude {lon}" -M"set Exif.GPSInfo.GPSLatitudeRef {lonref}"'
+    cmdalt = '-M"set Exif.GPSInfo.GPSAltitude {alt}"'
+
+    cmd = [
+        'exiv2', 
+        cmdlon.format(lon=gpsrational_to_hexatupel(lon), lonref=['N','S'][lon < 0.0]),
+        cmdlat.format(lat=gpsrational_to_hexatupel(lat), latref=['W','E'][lat < 0.0]),
+        cmdalt.format(lat=gpsrational_to_hexatupel(alt)),
+        imgfile
+    ]
     try:
-        cp = subprocess.run(["identify", "-format", "'%[EXIF:*]'", imgfile], stdout=subprocess.PIPE, universal_newlines=True)
-        exif_stream = cp.stdout.split('\n')
-#        exif_stream = subprocess.Popen(["identify", "-format", "'%[EXIF:*]'", imgfile], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()[0].split('\n')
+        cp = subprocess.run(cmd, stdout=subprocess.PIPE, universal_newlines=True)
     except:
         return ""
     #end try
-    for line in exif_stream:
-        reexif = re.match("exif:([^=]*)=(.*)", line)
-        if reexif:
-            tag, value = reexif.groups()
-            exif[tag] = value
-        #end if
-    #end for
-    return exif
 #end def
+    
 
 def get_exiv2(imgfile):
     exif = {}
     try:
         cp = subprocess.run(["exiv2", "-pv", imgfile], stdout=subprocess.PIPE, universal_newlines=True)
         exif_stream = cp.stdout.split('\n')
-#        exif_stream = subprocess.Popen(["identify", "-format", "'%[EXIF:*]'", imgfile], stdout=subprocess.PIPE, stderr=subprocess.PIPE).communicate()[0].split('\n')
     except:
         return ""
     #end try
@@ -73,20 +75,36 @@ def get_exiv2(imgfile):
     #end for
     return exif
 #end def
-    
+
+States = {
+    "NONE"              : "",
+    "GPS_PRESENT"       : "gps present",
+    "INTERPOLATED"      : "interpolated match",
+    "EXACT"             : "exact match",
+    "SNAPPED"           : "snapped to closest",
+    "OVERWRITTEN"       : "old values overwritten",
+    "OUT_OF_RANGE"      : "out of range",
+    "MULTI"             : "multiple matches",
+    "TOO_FAR"           : "too far",
+    }    
 def get_gps_info(exif):
     try:
-        longitude = [1.0,-1.0][exif["GPSLongitudeRef"] == "W"] * hexatupel(exif["GPSLongitude"])
-        latitude = [1.0,-1.0][exif["GPSLatitudeRef"] == "S"] * hexatupel(exif["GPSLatitude"])
-        altitude = [1.0,-1.0][exif["GPSAltitudeRef"] == "1"] * hexatupel(exif["GPSAltitude"])
+        longitude = [1.0,-1.0][exif["GPSLongitudeRef"] == "W"] * hexatupel_to_gpsrational(exif["GPSLongitude"])
+        latitude = [1.0,-1.0][exif["GPSLatitudeRef"] == "S"] * hexatupel_to_gpsrational(exif["GPSLatitude"])
+        altitude = [1.0,-1.0][exif["GPSAltitudeRef"] == "1"] * hexatupel_to_gpsrational(exif["GPSAltitude"])
     except:
-        return ""
+        return []
     #end try
-    return "%f %f %.1f" % (latitude, longitude, altitude)
+    return (latitude, longitude, altitude)
 #end def
 
 def gpxtime2datetime(ts):
     return datetime.datetime(*[int(s) for s in ts.split("T")[0].split('-')+ ts.split("T")[1][:-1].split(":")])
+#end def
+
+def exiftime2datetime(ts):
+    rets = re.match("(\d\d\d\d):(\d\d):(\d\d) (\d\d):(\d\d):(\d\d)", ts)
+    return datetime.datetime(*[int(s) for s in rets.groups()])
 #end def
 
 class Point:
@@ -96,6 +114,9 @@ class Point:
         self.lat = lat
         self.elev = elev
         self.data = data
+    #end def
+    def get_gpsinfo(self):
+        return(self.lat, self.lon, self.elev)
     #end def
 #end class
 
@@ -116,7 +137,11 @@ class Segment:
 #end def
 
 class GPXData:
-    def __init__(self):
+    def __init__(self, tz=0, to=0):
+        self.tz = tz
+        self.tz_offset = datetime.timedelta(0, 3600*tz, 0)
+        self.to = to
+        self.to_offset = datetime.timedelta(0, to, 0)
         self.segment = []
         self.fileno = 0
         self.start = []
@@ -124,12 +149,70 @@ class GPXData:
         self.ptno = 0
         pass
     #end def
-
-    def correlate(self, image):
+    
+    def correlate(self, image, maxdiff=60, interpolate=False, overwrite=False):
+        state = set()
+        md_offset = datetime.timedelta(0, maxdiff, 0)
+        ex_offset = datetime.timedelta(0, 1, 0)
         exif = get_exiv2(image)
-        print(image, get_gps_info(exif))
-        
-        
+        old_gps = get_gps_info(exif)
+        if len(old_gps) > 0: state.add("GPS_PRESENT")
+        dt_original = exif['DateTimeOriginal']
+        dto = exiftime2datetime(dt_original)
+        dtzulu = dto - self.tz_offset - self.to_offset
+        matches = []
+        offsets = []
+        for segment in self.segment:
+            if dtzulu < segment.start or dtzulu > segment.end: continue
+            start = 0
+            end = len(segment.points)-1
+            match = None
+            while True:
+                if (end - start) <= 1:
+                    off_start = segment.points[end].timestamp - dtzulu
+                    off_end = segment.points[end].timestamp - dtzulu
+                    if interpolate is True:
+                        print("Interpolation not yet implemented")
+                    #end if
+                    if segment.points[end].timestamp - dtzulu < dtzulu - segment.points[start].timestamp:
+                        match = segment.points[end]
+                        offset = off_end
+                    else:
+                        match = segment.points[start]
+                        offset = off_start
+                    #end if
+                    if match is not None:
+                        matches.append(match)
+                        offsets.append(offset)
+                    #end if
+                    break
+                #end if
+                mid = (end + start) // 2
+                if dtzulu < segment.points[mid].timestamp:
+                    end = mid
+                else:
+                    start = mid
+                #end if
+                print(start, mid, end)
+            #end while
+        #end for
+        found = None
+        for matchno in range(len(matches)):
+            if offsets[matchno] > md_offset:
+                state.add("TOO_FAR")
+                continue
+            #end if
+            if offsets[matchno] < ex_offset:
+                state.add("EXACT")
+            else:
+                state.add("SNAPPED")
+            #end if
+            if found is None or offsets[matchno] < offsets[found]:
+                found = matchno
+            #end if
+            return (matches[found].get_gpsinfo(), old_gps, offsets[found].total_seconds(), state)
+
+    #end def
         
     def add_segment(self, segment):
         self.segment.append(segment)
@@ -176,7 +259,10 @@ class GPXData:
 #end class
 
 def main(args):
-    options = {}
+    options = {
+        'tz': '0',
+        'to': '0',
+        }
     gpxfiles = []
     imagefiles = []
     files = gpxfiles
@@ -193,20 +279,25 @@ def main(args):
         #end if
         files.append(arg)
     #end for
+    try:
+        tz = int(options['tz'])
+    except:
+        print("{} is not a valid timezone offset (-12 .. +12)".format(tz))
+    #end try
+    try:
+        to = int(options['to'])
+    except:
+        print("{} is not a valid time offset (number of seconds)".format(tz))
+    #end try
     print(imagefiles, gpxfiles)
-    gpxdata = GPXData()
+    gpxdata = GPXData(tz, to)
     for gpxfile in gpxfiles:
         gpxdata.add_file(gpxfile)
     #end if
     for image in imagefiles:
-        gpxdata.correlate(image)    
+        res = gpxdata.correlate(image)
+        print(res)
     #end for
-'''#
-       <trkpt lat="50.1439479925" lon="-5.4180954862">
-           <ele>21.77</ele>
-           <time>2016-10-26T10:13:08Z</time>
-       </trkpt>
-'''
         
 if __name__ == "__main__":
     main(sys.argv[1:])
