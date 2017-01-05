@@ -5,19 +5,45 @@
 #===============================================================================
 import xml.etree.ElementTree as ET
 import sys
+import os
 import glob
 import re
 import subprocess
 import datetime
+import logging
 from math import degrees
 
-nsp = {
+if __name__ == "__main__":
+    logname = "gpxcorrelate.log"
+    logging.basicConfig(filename=logname, level=logging.DEBUG,
+        format = "%(asctime)s %(levelname)-8s %(name)-20s %(message)s",
+        datefmt = "%d %b %Y %H:%M:%S",
+        filemode = "w")
+    logger = logging.getLogger(logname)    
+else:
+    logger = logging.getLogger(__file__)
+#end if
+
+Nsp = {
     "gpx": "http://www.topografix.com/GPX/1/1",
     "gpxx" : "http://www.garmin.com/xmlschemas/GpxExtensions/v3",
     "gpxspx": "http://www.garmin.com/xmlschemas/TrackStatsExtension/v1",
     "gpxwpx": "http://www.garmin.com/xmlschemas/WaypointExtension/v1",
     "gpxtpx": "http://www.garmin.com/xmlschemas/TrackPointExtension/v1",
 }
+
+States = {
+    "NONE"              : "",
+    "GPS_PRESENT"       : "gps present",
+    "INTERPOLATED"      : "interpolated match",
+    "EXACT"             : "exact match",
+    "SNAPPED"           : "snapped to closest",
+    "OVERWRITTEN"       : "old values overwritten",
+    "OUT_OF_RANGE"      : "out of range",
+    "MULTI"             : "multiple matches",
+    "TOO_FAR"           : "too far",
+    }
+    
 
 def hexatupel_to_gpsrational(ht_string):
     htupel = [val.split('/') for val in ht_string.split()]
@@ -34,23 +60,24 @@ def gpsrational_to_hexatupel(rational):
     degrees = int(rational)
     minutes = int(60 * (rational - degrees))
     seconds = 3600 * (rational - degrees) - 60 * minutes
-    return "{d}/1 {d}/1 {d}/100".format(degrees, minutes, int(100*seconds))
+    return "{:d}/1 {:d}/1 {:d}/100".format(degrees, minutes, int(100*seconds))
 #end def
 
 def set_exiv_gps(imgfile, lon, lat, alt=None):
+    cmdlon = '-M"set Exif.GPSInfo.GPSLongitude {lon}" -M"set Exif.GPSInfo.GPSLongitudeRef {lonref}"'
     cmdlat = '-M"set Exif.GPSInfo.GPSLatitude {lat}" -M"set Exif.GPSInfo.GPSLatitudeRef {latref}"'
-    cmdlon = '-M"set Exif.GPSInfo.GPSLatitude {lon}" -M"set Exif.GPSInfo.GPSLatitudeRef {lonref}"'
-    cmdalt = '-M"set Exif.GPSInfo.GPSAltitude {alt}"'
+    cmdalt = '-M"set Exif.GPSInfo.GPSAltitude {alt}" -M"set Exif.GPSInfo.GPSAltitudeRef {altref}"'
 
     cmd = [
         'exiv2', 
-        cmdlon.format(lon=gpsrational_to_hexatupel(lon), lonref=['N','S'][lon < 0.0]),
-        cmdlat.format(lat=gpsrational_to_hexatupel(lat), latref=['W','E'][lat < 0.0]),
-        cmdalt.format(lat=gpsrational_to_hexatupel(alt)),
+        cmdlon.format(lon=gpsrational_to_hexatupel([lon, -lon][lon < 0.0]), lonref=['E','W'][lon < 0.0]),
+        cmdlat.format(lat=gpsrational_to_hexatupel([lat, -lat][lat < 0.0]), latref=['N','S'][lat < 0.0]),
+        cmdalt.format(alt="{:d}/10000".format(int([alt, -alt][alt < 0.0] * 10000.0)), altref=int(alt < 0.0)),
         imgfile
     ]
+    
     try:
-        cp = subprocess.run(cmd, stdout=subprocess.PIPE, universal_newlines=True)
+        cp = subprocess.run(" ".join(cmd), stdout=subprocess.PIPE, universal_newlines=True)
     except:
         return ""
     #end try
@@ -59,12 +86,12 @@ def set_exiv_gps(imgfile, lon, lat, alt=None):
 
 def get_exiv2(imgfile):
     exif = {}
-    try:
-        cp = subprocess.run(["exiv2", "-pv", imgfile], stdout=subprocess.PIPE, universal_newlines=True)
+    cp = subprocess.run(["exiv2", "-pv", imgfile], stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+    if cp.returncode == 0:
         exif_stream = cp.stdout.split('\n')
-    except:
+    else:
         return ""
-    #end try
+    #end if
     for line in exif_stream:
         # reexif = re.match("(0x[0-9a-f]{4})\s+(\w+)\s+(\w+)\s+(\d+)\s+(.*)", line)
         reexif = re.match("0x[0-9a-f]{4}\s+\w+\s+(\w+)\s+\w+\s+\d+\s+(.*)", line)
@@ -76,27 +103,29 @@ def get_exiv2(imgfile):
     return exif
 #end def
 
-States = {
-    "NONE"              : "",
-    "GPS_PRESENT"       : "gps present",
-    "INTERPOLATED"      : "interpolated match",
-    "EXACT"             : "exact match",
-    "SNAPPED"           : "snapped to closest",
-    "OVERWRITTEN"       : "old values overwritten",
-    "OUT_OF_RANGE"      : "out of range",
-    "MULTI"             : "multiple matches",
-    "TOO_FAR"           : "too far",
-    }    
-def get_gps_info(exif):
-    try:
-        longitude = [1.0,-1.0][exif["GPSLongitudeRef"] == "W"] * hexatupel_to_gpsrational(exif["GPSLongitude"])
-        latitude = [1.0,-1.0][exif["GPSLatitudeRef"] == "S"] * hexatupel_to_gpsrational(exif["GPSLatitude"])
-        altitude = [1.0,-1.0][exif["GPSAltitudeRef"] == "1"] * hexatupel_to_gpsrational(exif["GPSAltitude"])
-    except:
-        return []
-    #end try
-    return (latitude, longitude, altitude)
-#end def
+class GpsInfo:
+    def __init__(self, exif):
+        self.longitude = self.latitude = self.altitude = None
+        try: self.longitude = [1.0,-1.0][exif["GPSLongitudeRef"] == "W"] * hexatupel_to_gpsrational(exif["GPSLongitude"])
+        except: pass
+        try: self.latitude = [1.0,-1.0][exif["GPSLatitudeRef"] == "S"] * hexatupel_to_gpsrational(exif["GPSLatitude"])
+        except: pass
+        try:self.altitude = [1.0,-1.0][exif["GPSAltitudeRef"] == "1"] * hexatupel_to_gpsrational(exif["GPSAltitude"])
+        except: pass
+    #end def
+    def __str__(self):
+        if self.longitude is None: lon = "{:8s}".format("-")
+        else: lon = "{:8.4f}".format(self.longitude)
+        if self.latitude is None: lat = "{:8s}".format("-")
+        else: lat = "{:8.4f}".format(self.latitude)
+        if self.altitude is None: alt = "{:4s}".format("-")
+        else: alt = "{:4.0f}".format(self.altitude)
+        return "{} {} {}".format(lon, lat, alt)
+    #end def
+    def has_coordinates(self):
+        return self.longitude != None and self.latitude != None
+    #end def
+#end class
 
 def gpxtime2datetime(ts):
     return datetime.datetime(*[int(s) for s in ts.split("T")[0].split('-')+ ts.split("T")[1][:-1].split(":")])
@@ -116,7 +145,7 @@ class Point:
         self.data = data
     #end def
     def get_gpsinfo(self):
-        return(self.lat, self.lon, self.elev)
+        return(self.lon, self.lat, self.elev)
     #end def
 #end class
 
@@ -125,6 +154,9 @@ class Segment:
         self.start = None
         self.end = None
         self.points = []
+    #end def
+    def __len__(self):
+        return(len(self.points))
     #end def
     def add_point(self, point):
         self.points.append(point)
@@ -150,13 +182,17 @@ class GPXData:
         pass
     #end def
     
-    def correlate(self, image, maxdiff=60, interpolate=False, overwrite=False):
+    def correlate(self, image, maxdiff=60, tag=None, interpolate=False, overwrite=False):
         state = set()
         md_offset = datetime.timedelta(0, maxdiff, 0)
         ex_offset = datetime.timedelta(0, 1, 0)
         exif = get_exiv2(image)
-        old_gps = get_gps_info(exif)
-        if len(old_gps) > 0: state.add("GPS_PRESENT")
+        if exif == "":
+            logging.warn("{}: no exif data - skipped.".format(image))
+            return("-")
+        #end if
+        old_gps = GpsInfo(exif)
+        if old_gps.has_coordinates(): state.add("GPS_PRESENT")
         dt_original = exif['DateTimeOriginal']
         dto = exiftime2datetime(dt_original)
         dtzulu = dto - self.tz_offset - self.to_offset
@@ -169,7 +205,7 @@ class GPXData:
             match = None
             while True:
                 if (end - start) <= 1:
-                    off_start = segment.points[end].timestamp - dtzulu
+                    off_start = segment.points[start].timestamp - dtzulu
                     off_end = segment.points[end].timestamp - dtzulu
                     if interpolate is True:
                         print("Interpolation not yet implemented")
@@ -187,13 +223,12 @@ class GPXData:
                     #end if
                     break
                 #end if
-                mid = (end + start) // 2
+                mid = (start + end) // 2
                 if dtzulu < segment.points[mid].timestamp:
                     end = mid
                 else:
                     start = mid
                 #end if
-                print(start, mid, end)
             #end while
         #end for
         found = None
@@ -210,8 +245,12 @@ class GPXData:
             if found is None or offsets[matchno] < offsets[found]:
                 found = matchno
             #end if
-            return (matches[found].get_gpsinfo(), old_gps, offsets[found].total_seconds(), state)
-
+            mlon, mlat, mele = [float(x) for x in matches[found].get_gpsinfo()]
+            logging.info("{:s}: matched: {:8.4f} {:8.4f} {:4.0f} error: {:2d}s, old: {:s}".format(image, mlon, mlat, mele, int(offsets[found].total_seconds()), str(old_gps)))
+            set_exiv_gps(image, mlon, mlat, mele)
+            return
+        #end for
+        logging.info("{:s}: matched: {:8s} {:8s} {:4s} error: {:2s}s, old: {:s}".format(image, "-", "-", "-", "-", str(old_gps)))
     #end def
         
     def add_segment(self, segment):
@@ -224,53 +263,112 @@ class GPXData:
         #end if
     #end def
     
-    def add_file(self, gpxfile):
-        with open(gpxfile, 'r') as gpx:
-            self.fileno += 1
+    def add_file(self, gpxfile, tags=[]):
+        logging.info("adding gpx: {}".format(gpxfile))
+        try:
+            gpx = open(gpxfile, 'r')
+        except:
+            logging.error("{}: cannot open file for reading - skipped.".format(gpxfile))
+            return
+        #end try
+        try:
             tree = ET.parse(gpx)
             gpx = tree.getroot()
-            trackno = 0
-            for track in gpx.findall('gpx:trk', nsp):
-                trackno += 1
-                name = track.find('gpx:name', nsp).text
-                segno = 0
-                for seg in track.findall('gpx:trkseg', nsp):
-                    segment = Segment()
-                    segno += 1
-                    for pt in seg.findall('gpx:trkpt', nsp):
-                        self.ptno += 1
-                        lat = pt.get("lat")
-                        lon = pt.get("lon")
-                        data = {}
-                        ele = pt.find("gpx:ele", nsp).text
-                        ts = pt.find("gpx:time", nsp).text
-                        timestamp = gpxtime2datetime(ts) 
-                        try: data['atemp'] = pt.find(".//gpxtpx:atemp", nsp).text
+        except:
+            logging.error("{}: no xml root found - skipped.".format(gpxfile))
+            return
+        #end try
+
+        self.fileno += 1
+                
+        trackno = 0
+        for track in gpx.findall('gpx:trk', Nsp):
+            trackno += 1
+            try:
+                name = track.find('gpx:name', Nsp).text
+                logging.info("{}: track name is '{}'".format(gpxfile, name))
+            except:
+                logging.warn("{}: no track name".format(gpxfile))
+            #end try
+
+            segno = 0
+            for seg in track.findall('gpx:trkseg', Nsp):
+                segment = Segment()
+                segno += 1
+                for pt in seg.findall('gpx:trkpt', Nsp):
+                    self.ptno += 1
+                    lon = pt.get("lon")
+                    lat = pt.get("lat")
+                    data = {}
+                    try:
+                        ele = pt.find("gpx:ele", Nsp).text
+                    except:
+                        logging.debug("{}: no elevation for {},{}".format(gpxfile, lon, lat))
+                    #end try                        
+                    try:
+                        ts = pt.find("gpx:time", Nsp).text
+                    except:
+                        logging.debug("{}: no timestamp for {},{} - track point skipped.".format(gpxfile, lon, lat))
+                        continue
+                    #end try
+                    timestamp = gpxtime2datetime(ts)
+                    for tag in tags: 
+#                            try: data['atemp'] = pt.find(".//gpxtpx:atemp", Nsp).text
+                        try: 
+                            data[tag] = pt.find(".//gpxtpx:{}".format(tag), Nsp).text
+                            print(data)
                         except: pass
-                        #end if
-                        point = Point(timestamp, lon, lat, ele, data)
-                        segment.add_point(point)
-                    #end for
-                    self.segment.append(segment)
+                    #end if
+                    point = Point(timestamp, lon, lat, ele, data)
+                    segment.add_point(point)
                 #end for
+                if len(segment) == 0:
+                    logging.warn("{}: segment does not contain enough data for correlation - skipped.".format(gpxfile))
+                else:
+                    self.segment.append(segment)
+                    logging.info("{}: {} points added.".format(gpxfile, len(segment)))
+                #end if
             #end for
-        #end with
+        #end for
     #end def
 #end class
 
+def help():
+    print("usage: gpxcorrelate [-v] [tz=<hours>] [to=<seconds>] <gpxfiles> -- <imagefiles>")
+    print("tz: timezone +- 12 hours")
+    print("to: time offset in seconds")
+#end def
+    
 def main(args):
     options = {
         'tz': '0',
         'to': '0',
+        'tag' : [],
         }
     gpxfiles = []
     imagefiles = []
     files = gpxfiles
     for arg in args:
-        match = re.match("(\w)+=(.+)", arg)
+        match = re.match("--?h.*", arg)
         if match is not None:
-            key, val = match.groups()[1:3]
-            options[key] = val
+            help()
+            return
+        #end if
+        match = re.match("-(\w)", arg)
+        if match is not None:
+            key = match.groups()[0]
+            options[key] = "set"
+            continue
+        #end if
+        match = re.match("(\w+)=(.+)", arg)
+        if match is not None:
+                
+            key, val = match.groups()
+            if key == 'tag':
+                options['tag'].append(val)
+            else:
+                options[key] = val
+            #end if
             continue
         #end if
         if arg == "--":
@@ -279,6 +377,15 @@ def main(args):
         #end if
         files.append(arg)
     #end for
+    if 'v' in options:
+        logger = logging.getLogger()
+        logger.setLevel(logging.DEBUG)
+        strhd = logging.StreamHandler(sys.stdout)
+        strhd.setLevel(logging.INFO)
+        formatter = logging.Formatter("%(message)s")
+        strhd.setFormatter(formatter)
+        logger.addHandler(strhd)
+    #end if
     try:
         tz = int(options['tz'])
     except:
@@ -289,14 +396,13 @@ def main(args):
     except:
         print("{} is not a valid time offset (number of seconds)".format(tz))
     #end try
-    print(imagefiles, gpxfiles)
     gpxdata = GPXData(tz, to)
     for gpxfile in gpxfiles:
-        gpxdata.add_file(gpxfile)
+        gpxdata.add_file(gpxfile, tags=options['tag'])
     #end if
     for image in imagefiles:
         res = gpxdata.correlate(image)
-        print(res)
+        #print(res)
     #end for
         
 if __name__ == "__main__":
