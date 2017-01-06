@@ -64,23 +64,26 @@ def gpsrational_to_hexatupel(rational):
 #end def
 
 def set_exiv_gps(imgfile, lon, lat, alt=None):
-    cmdlon = '-M"set Exif.GPSInfo.GPSLongitude {lon}" -M"set Exif.GPSInfo.GPSLongitudeRef {lonref}"'
-    cmdlat = '-M"set Exif.GPSInfo.GPSLatitude {lat}" -M"set Exif.GPSInfo.GPSLatitudeRef {latref}"'
-    cmdalt = '-M"set Exif.GPSInfo.GPSAltitude {alt}" -M"set Exif.GPSInfo.GPSAltitudeRef {altref}"'
+    cmdlon = '-Mset Exif.GPSInfo.GPSLongitude {lon}'
+    cmdlonref =  '-Mset Exif.GPSInfo.GPSLongitudeRef {lonref}'
+    cmdlat = '-Mset Exif.GPSInfo.GPSLatitude {lat}'
+    cmdlatref =  '-Mset Exif.GPSInfo.GPSLatitudeRef {latref}'
+    cmdalt = '-Mset Exif.GPSInfo.GPSAltitude {alt}'
+    cmdaltref = '-Mset Exif.GPSInfo.GPSAltitudeRef {altref}'
 
     cmd = [
         'exiv2', 
-        cmdlon.format(lon=gpsrational_to_hexatupel([lon, -lon][lon < 0.0]), lonref=['E','W'][lon < 0.0]),
-        cmdlat.format(lat=gpsrational_to_hexatupel([lat, -lat][lat < 0.0]), latref=['N','S'][lat < 0.0]),
-        cmdalt.format(alt="{:d}/10000".format(int([alt, -alt][alt < 0.0] * 10000.0)), altref=int(alt < 0.0)),
+        cmdlon.format(lon=gpsrational_to_hexatupel([lon, -lon][lon < 0.0])),
+        cmdlonref.format(lonref=['E','W'][lon < 0.0]),
+        cmdlat.format(lat=gpsrational_to_hexatupel([lat, -lat][lat < 0.0])),
+        cmdlatref.format(latref=['N','S'][lat < 0.0]),
+        cmdalt.format(alt="{:d}/10000".format(int([alt, -alt][alt < 0.0] * 10000.0))),
+        cmdaltref.format(altref=int(alt < 0.0)),
         imgfile
     ]
+    cp = subprocess.run(cmd, stdout=subprocess.PIPE)
+    logging.debug(" ".join(cmd))
     
-    try:
-        cp = subprocess.run(" ".join(cmd), stdout=subprocess.PIPE, universal_newlines=True)
-    except:
-        return ""
-    #end try
 #end def
     
 
