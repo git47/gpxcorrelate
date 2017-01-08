@@ -10,8 +10,12 @@ import glob
 import re
 import subprocess
 import datetime
+import json
+import time
 import logging
 from math import degrees
+import urllib3
+logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 if __name__ == "__main__":
     logname = "gpxcorrelate.log"
@@ -24,6 +28,10 @@ else:
     logger = logging.getLogger(__file__)
 #end if
 
+Tags = {
+    "atemp": "{value}°C", 
+}
+
 Nsp = {
     "gpx": "http://www.topografix.com/GPX/1/1",
     "gpxx" : "http://www.garmin.com/xmlschemas/GpxExtensions/v3",
@@ -31,6 +39,7 @@ Nsp = {
     "gpxwpx": "http://www.garmin.com/xmlschemas/WaypointExtension/v1",
     "gpxtpx": "http://www.garmin.com/xmlschemas/TrackPointExtension/v1",
 }
+
 
 States = {
     "NONE"              : "",
@@ -62,6 +71,9 @@ def gpsrational_to_hexatupel(rational):
     seconds = 3600 * (rational - degrees) - 60 * minutes
     return "{:d}/1 {:d}/1 {:d}/100".format(degrees, minutes, int(100*seconds))
 #end def
+def set_exiv_comment(imgfile, comment):
+    cp = subprocess.run(['exiv2', '-k', '-Mset Exif.Photo.UserComment charset=Ascii {}'.format(comment), imgfile],stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+#end def
 
 def set_exiv_gps(imgfile, lon, lat, alt=None):
     cmdlon = '-Mset Exif.GPSInfo.GPSLongitude {lon}'
@@ -86,6 +98,25 @@ def set_exiv_gps(imgfile, lon, lat, alt=None):
     
 #end def
     
+def gsp2name(lon, lat):
+    http = urllib3.PoolManager()
+    url="http://maps.googleapis.com/maps/api/geocode/json?latlng={},{}&sensor=true"
+    response = http.request('GET', url.format(lat, lon))
+    try:
+        data = json.loads(str(response.data, 'utf-8'))
+        name = data['results'][0]['formatted_address']
+    except:
+        name = None
+    #end try
+    return name
+#end def
+
+#def gsp2name(lon, lat):
+#    url="http://maps.googleapis.com/maps/api/geocode/json?latlng={},{}&sensor=true"
+#    data = json.load(urllib2.urlopen(url.format(lon, lat)))
+#    name = data['results'][0]['formatted_address']
+#    return name
+#end def
 
 def get_exiv2(imgfile):
     exif = {}
@@ -192,7 +223,7 @@ class GPXData:
         exif = get_exiv2(image)
         if exif == "":
             logging.warn("{}: no exif data - skipped.".format(image))
-            return("-")
+            return None
         #end if
         old_gps = GpsInfo(exif)
         if old_gps.has_coordinates(): state.add("GPS_PRESENT")
@@ -251,9 +282,10 @@ class GPXData:
             mlon, mlat, mele = [float(x) for x in matches[found].get_gpsinfo()]
             logging.info("{:s}: matched: {:8.4f} {:8.4f} {:4.0f} error: {:2d}s, old: {:s}".format(image, mlon, mlat, mele, int(offsets[found].total_seconds()), str(old_gps)))
             set_exiv_gps(image, mlon, mlat, mele)
-            return
+            return matches[found].get_gpsinfo() + (exif,)
         #end for
         logging.info("{:s}: matched: {:8s} {:8s} {:4s} error: {:2s}s, old: {:s}".format(image, "-", "-", "-", "-", str(old_gps)))
+        return None
     #end def
         
     def add_segment(self, segment):
@@ -319,7 +351,6 @@ class GPXData:
 #                            try: data['atemp'] = pt.find(".//gpxtpx:atemp", Nsp).text
                         try: 
                             data[tag] = pt.find(".//gpxtpx:{}".format(tag), Nsp).text
-                            print(data)
                         except: pass
                     #end if
                     point = Point(timestamp, lon, lat, ele, data)
@@ -344,7 +375,7 @@ def help():
     
 def main(args):
     options = {
-        'tz': '0',
+        'tz': str(-time.timezone//3600),
         'to': '0',
         'tag' : [],
         }
@@ -404,7 +435,16 @@ def main(args):
         gpxdata.add_file(gpxfile, tags=options['tag'])
     #end if
     for image in imagefiles:
-        res = gpxdata.correlate(image)
+        result = gpxdata.correlate(image)
+        if result is None: continue
+        lon, lat, ele, exif = result
+        if 'place' in options and options['place'].lower() in ('yes', 'true', '1'):
+            place = gsp2name(lon, lat)
+            comment = exif['UserComment']
+            if place is not None and not place in comment:
+                comment = comment + ", " + place
+                set_exiv_comment(image, comment)
+        #end if
         #print(res)
     #end for
         
