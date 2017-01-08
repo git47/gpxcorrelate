@@ -29,7 +29,7 @@ else:
 #end if
 
 Tags = {
-    "atemp": "{value}°C", 
+    "atemp": ["{value}C",], 
 }
 
 Nsp = {
@@ -181,6 +181,9 @@ class Point:
     def get_gpsinfo(self):
         return(self.lon, self.lat, self.elev)
     #end def
+    def get_data(self):
+        return self.data
+    #end def
 #end class
 
 class Segment:
@@ -282,7 +285,7 @@ class GPXData:
             mlon, mlat, mele = [float(x) for x in matches[found].get_gpsinfo()]
             logging.info("{:s}: matched: {:8.4f} {:8.4f} {:4.0f} error: {:2d}s, old: {:s}".format(image, mlon, mlat, mele, int(offsets[found].total_seconds()), str(old_gps)))
             set_exiv_gps(image, mlon, mlat, mele)
-            return matches[found].get_gpsinfo() + (exif,)
+            return [matches[found], exif]
         #end for
         logging.info("{:s}: matched: {:8s} {:8s} {:4s} error: {:2s}s, old: {:s}".format(image, "-", "-", "-", "-", str(old_gps)))
         return None
@@ -348,7 +351,6 @@ class GPXData:
                     #end try
                     timestamp = gpxtime2datetime(ts)
                     for tag in tags: 
-#                            try: data['atemp'] = pt.find(".//gpxtpx:atemp", Nsp).text
                         try: 
                             data[tag] = pt.find(".//gpxtpx:{}".format(tag), Nsp).text
                         except: pass
@@ -368,7 +370,7 @@ class GPXData:
 #end class
 
 def help():
-    print("usage: gpxcorrelate [-v] [tz=<hours>] [to=<seconds>] <gpxfiles> -- <imagefiles>")
+    print("usage: gpxcorrelate [-v] [tz=<hours>] [to=<seconds>] [place=<true|false>] <gpxfiles> -- <imagefiles>")
     print("tz: timezone +- 12 hours")
     print("to: time offset in seconds")
 #end def
@@ -378,6 +380,7 @@ def main(args):
         'tz': str(-time.timezone//3600),
         'to': '0',
         'tag' : [],
+        'comment' : 'append',
         }
     gpxfiles = []
     imagefiles = []
@@ -437,15 +440,41 @@ def main(args):
     for image in imagefiles:
         result = gpxdata.correlate(image)
         if result is None: continue
-        lon, lat, ele, exif = result
+        lon, lat, ele = result[0].get_gpsinfo()
+        data = result[0].get_data()
+        exif = result[1]
+        if options['comment'] == "clear":
+            comment = newcomment = ""
+        else:
+            comment = newcomment = exif['UserComment']
+        #endif
+        if len(comment) == 0:
+            delimiter = ""
+        else:
+            delimiter = ", "
+        #end if 
         if 'place' in options and options['place'].lower() in ('yes', 'true', '1'):
             place = gsp2name(lon, lat)
-            comment = exif['UserComment']
-            if place is not None and not place in comment:
-                comment = comment + ", " + place
-                set_exiv_comment(image, comment)
+            if place is not None and not place in newcomment:
+                newcomment = newcomment + delimiter + place
+                delimiter = ", "
+            #end if
         #end if
-        #print(res)
+        for tag in options['tag']:
+            try:
+                formatted_value = Tags[tag][0].format(value=data[tag])
+            except:
+                formatted_value = "{}={}".format(tag, data[tag])
+            #end try
+            if tag in data and not formatted_value in newcomment:   
+                newcomment = newcomment + delimiter + formatted_value
+                delimiter = ", "
+            #end if
+        #end for
+        if newcomment != comment:
+            logging.debug("UserComment '{}' -> '{}'".format(comment, newcomment))
+            set_exiv_comment(image, newcomment)
+        #end if
     #end for
         
 if __name__ == "__main__":
