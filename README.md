@@ -1,6 +1,6 @@
 # gpxcorrelate
 
-This software is work and progress. Currently, it seems to be working in first tests, but it is lacking a lot of checks and functions.
+This software is work in progress. Currently, it seems to be working in first tests, but it is lacking a lot of checks and functions.
 THIS IS NOT READY NOT FOR PRODUCTIVE USE.
 
 ## Synopsis
