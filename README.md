@@ -14,7 +14,7 @@ gpscorrelate is fine, but since it is no longer being developed, I decided to wr
 * adding place names,
 * reading multiple gpx files, e.g. parallel recordings from different devices, and map to the closest trackpoint over all files,
 * spline interpolation (planned) and perhaps even estimation of directions,
-* whatever seems useful and be implemented with reasonable effort.
+* whatever seems useful and can be implemented with reasonable effort.
 
 ## Dependecies
 
@@ -32,7 +32,6 @@ For a quick start, I decided to use exiv2 for modifying exif tags. I may move to
 * tz: timezone +- 12 hours
 * time offset in seconds
 
-#end def
 
 ## Examples
 
