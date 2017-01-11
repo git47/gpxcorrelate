@@ -21,7 +21,6 @@ gpscorrelate is fine, but since it is no longer being developed, I decided to wr
 Complete list of dependencies:
 * Linux OS or similar
 * Python3.x
-* urllib3
 * evix2 command line version
 
 For a quick start, I decided to use exiv2 for modifying exif tags. I may move to pyexiv later.
@@ -30,8 +29,8 @@ For a quick start, I decided to use exiv2 for modifying exif tags. I may move to
 
 `python3 gpxcorrelate [-v] [tz=<hours>] [to=<seconds>] [comment=<clear|append>] [place=<true|false>] <gpxfiles> -- <imagefiles>`
 * tz: timezone +- 12 hours
-* time offset in seconds
-
+* to: time offset in seconds
+* place: if true, request a place name from the google maps geocoding API. Note that this service is limited (2500 queries per day at the time of this writing). gpxcorrelate stops querying after the first over-the-limit response. 
 
 ## Examples
 
@@ -39,4 +38,4 @@ For a quick start, I decided to use exiv2 for modifying exif tags. I may move to
 
 Correlate all files in the current directory using all GPX files in ~/GPS/Tracks, using my local timezone. If possible, add a place name from the google maps API to the UserComment EXIF field. When available, also add the temperature value from the XML tag `atemp` to the UserComment.
 
- 
+

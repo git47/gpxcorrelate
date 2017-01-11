@@ -14,7 +14,7 @@ import json
 import time
 import logging
 from math import degrees
-import urllib3
+import urllib.request
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 if __name__ == "__main__":
@@ -99,23 +99,18 @@ def set_exiv_gps(imgfile, lon, lat, alt=None):
 #end def
     
 def gsp2name(lon, lat):
-    http = urllib3.PoolManager()
     url="http://maps.googleapis.com/maps/api/geocode/json?latlng={},{}&sensor=true"
-    response = http.request('GET', url.format(lat, lon))
-    try:
-        data = json.loads(str(response.data, 'utf-8'))
-        name = data['results'][0]['formatted_address']
-    except:
+    response = urllib.request.urlopen(url.format(lat, lon))
+    text = response.read()
+    data = json.loads(str(text, 'utf-8'))
+    status = data['status']
+    if status != 'OK':
+        logging.warn("Google Maps Geocoding API error: {}".format(data['status']))
         name = None
-    #end try
-    return name
-#end def
-
-#def gsp2name(lon, lat):
-#    url="http://maps.googleapis.com/maps/api/geocode/json?latlng={},{}&sensor=true"
-#    data = json.load(urllib2.urlopen(url.format(lon, lat)))
-#    name = data['results'][0]['formatted_address']
-#    return name
+    else:
+        name = data['results'][0]['formatted_address']
+    #end if
+    return status, name
 #end def
 
 def get_exiv2(imgfile):
@@ -454,7 +449,10 @@ def main(args):
             delimiter = ", "
         #end if 
         if 'place' in options and options['place'].lower() in ('yes', 'true', '1'):
-            place = gsp2name(lon, lat)
+            status, place = gsp2name(lon, lat)
+            if 'limit' in status.lower():
+                logger.warn('google maps api query limit exceeded - stopped retrieving place names')
+                options['place'] = 'false'
             if place is not None and not place in newcomment:
                 newcomment = newcomment + delimiter + place
                 delimiter = ", "
