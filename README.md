@@ -30,7 +30,7 @@ For a quick start, I decided to use exiv2 for modifying exif tags. I may move to
 `python3 gpxcorrelate [-v] [tz=<hours>] [to=<seconds>] [comment=<clear|append>] [place=<true|false>] <gpxfiles> -- <imagefiles>`
 * tz: timezone +- 12 hours
 * to: time offset in seconds
-* place: if true, request a place name from the google maps geocoding API. Note that this service is limited (2500 queries per day at the time of this writing). gpxcorrelate stops querying after the first over-the-limit response. 
+* place: if true, request a place name from the OSM Nominatim geocoding API. This code respects the restrictions stated at  https://operations.osmfoundation.org/policies/nominatim/. 
 
 ## Examples
 
