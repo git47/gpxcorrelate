@@ -5,16 +5,13 @@
 #===============================================================================
 import xml.etree.ElementTree as ET
 import sys
-import os
-import glob
 import re
+import os
 import subprocess
 import datetime
-import json
 import time
 import logging
-from math import degrees
-import urllib.request
+import gps2name
 logging.getLogger("urllib3").setLevel(logging.WARNING)
 
 if __name__ == "__main__":
@@ -72,7 +69,8 @@ def gpsrational_to_hexatupel(rational):
     return "{:d}/1 {:d}/1 {:d}/100".format(degrees, minutes, int(100*seconds))
 #end def
 def set_exiv_comment(imgfile, comment):
-    cp = subprocess.run(['exiv2', '-k', '-Mset Exif.Photo.UserComment charset=Ascii {}'.format(comment), imgfile],stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+#    cp = subprocess.run(['exiv2', '-k', '-Mset Exif.Photo.UserComment charset=Ascii {}'.format(comment), imgfile],stderr=subprocess.PIPE, stdout=subprocess.PIPE)
+    cp = subprocess.run(['exiv2', '-k', '-Mset Exif.Photo.UserComment {}'.format(comment), imgfile],stderr=subprocess.PIPE, stdout=subprocess.PIPE)
 #end def
 
 def set_exiv_gps(imgfile, lon, lat, alt=None):
@@ -97,21 +95,7 @@ def set_exiv_gps(imgfile, lon, lat, alt=None):
     logging.debug(" ".join(cmd))
     
 #end def
-    
-def gsp2name(lon, lat):
-    url="http://maps.googleapis.com/maps/api/geocode/json?latlng={},{}&sensor=true"
-    response = urllib.request.urlopen(url.format(lat, lon))
-    text = response.read()
-    data = json.loads(str(text, 'utf-8'))
-    status = data['status']
-    if status != 'OK':
-        logging.warn("Google Maps Geocoding API error: {}".format(data['status']))
-        name = None
-    else:
-        name = data['results'][0]['formatted_address']
-    #end if
-    return status, name
-#end def
+
 
 def get_exiv2(imgfile):
     exif = {}
@@ -371,12 +355,14 @@ def help():
 #end def
     
 def main(args):
+    global logger
     options = {
         'tz': str(-time.timezone//3600),
         'to': '0',
         'tag' : [],
         'comment' : 'append',
         }
+    url_cache = gps2name.Urlcache()
     gpxfiles = []
     imagefiles = []
     files = gpxfiles
@@ -433,7 +419,7 @@ def main(args):
         gpxdata.add_file(gpxfile, tags=options['tag'])
     #end if
     for image in imagefiles:
-        result = gpxdata.correlate(image)
+        result = gpxdata.correlate(image, maxdiff=300)
         if result is None: continue
         lon, lat, ele = result[0].get_gpsinfo()
         data = result[0].get_data()
@@ -441,7 +427,12 @@ def main(args):
         if options['comment'] == "clear":
             comment = newcomment = ""
         else:
-            comment = newcomment = exif['UserComment']
+            try:
+                comment = newcomment = exif['UserComment']
+            except:
+                logger.warn('{}: missing UserComment exif tag'.format(image))
+                comment = newcomment = ""
+            #end try
         #endif
         if len(comment) == 0:
             delimiter = ""
@@ -449,10 +440,8 @@ def main(args):
             delimiter = ", "
         #end if 
         if 'place' in options and options['place'].lower() in ('yes', 'true', '1'):
-            status, place = gsp2name(lon, lat)
-            if 'limit' in status.lower():
-                logger.warn('google maps api query limit exceeded - stopped retrieving place names')
-                options['place'] = 'false'
+            #status, place = gps2name.gps2name(lon, lat)
+            place = gps2name.gps2name(float(lat), float(lon), image=os.path.basename(image), url_cache=url_cache)
             if place is not None and not place in newcomment:
                 newcomment = newcomment + delimiter + place
                 delimiter = ", "
@@ -462,9 +451,13 @@ def main(args):
             try:
                 formatted_value = Tags[tag][0].format(value=data[tag])
             except:
-                formatted_value = "{}={}".format(tag, data[tag])
+                try:
+                    formatted_value = "{}={}".format(tag, data[tag])
+                except:
+                    formatted_value = None
+                #end try
             #end try
-            if tag in data and not formatted_value in newcomment:   
+            if tag in data and not formatted_value is None and not formatted_value in newcomment:   
                 newcomment = newcomment + delimiter + formatted_value
                 delimiter = ", "
             #end if
