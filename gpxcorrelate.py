@@ -195,7 +195,6 @@ class GPXData:
         self.start = []
         self.end = []
         self.ptno = 0
-        pass
     #end def
     
     def correlate(self, image, maxdiff=60, tag=None, interpolate=False, overwrite=False):
