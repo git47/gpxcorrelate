@@ -9,7 +9,7 @@ A simple command line gpx correlator for photos, similar to gpscorrelate.
 
 ## Motivation
 
-gpscorrelate is fine, but <s>since it is no longer being developed,</s> I decided to write my own correlator in order to add functions, namely
+gpscorrelate is fine, but I decided to write my own correlator in order to add functions, namely
 * correlating additional gpx tags, such as temperature or heart rate,
 * adding place names,
 * reading multiple gpx files, e.g. parallel recordings from different devices, and map to the closest trackpoint over all files,
